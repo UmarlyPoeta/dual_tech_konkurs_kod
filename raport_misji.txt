@@ -1,0 +1,18 @@
+RAPORT Z MISJI REKONESANSOWEJ
+
+Drużyna: UGV-Tech
+Data: 13.05.2025
+
+Rozpoznane obiekty:
+- czerwona kula
+- zielony sześcian
+- niebieski stożek
+
+Przebyta trasa:
+A1 -> B1 -> B2 -> C2 -> C3
+
+Trasa optymalna:
+A1 -> B2 -> C3
+
+Długość trasy optymalnej:
+7.42 m
