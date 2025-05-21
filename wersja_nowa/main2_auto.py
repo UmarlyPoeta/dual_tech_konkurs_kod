@@ -1,5 +1,4 @@
 import cv2
-import RPi.GPIO as GPIO
 import time
 from picamera2 import Picamera2
 from pyzbar.pyzbar import decode
@@ -54,16 +53,33 @@ def get_gps_location():
 
 # --- GPIO silników ---
 IN1, IN2, IN3, IN4 = 17, 22, 23, 24
-GPIO.setmode(GPIO.BCM)
-GPIO.setwarnings(False)
-for pin in [IN1, IN2, IN3, IN4]:
-    GPIO.setup(pin, GPIO.OUT)
+from gpiozero import Motor
+from time import sleep
 
-def forward(): GPIO.output(IN1, GPIO.HIGH); GPIO.output(IN2, GPIO.LOW); GPIO.output(IN3, GPIO.HIGH); GPIO.output(IN4, GPIO.LOW)
-def backward(): GPIO.output(IN1, GPIO.LOW); GPIO.output(IN2, GPIO.HIGH); GPIO.output(IN3, GPIO.LOW); GPIO.output(IN4, GPIO.HIGH)
-def left(): GPIO.output(IN1, GPIO.LOW); GPIO.output(IN2, GPIO.HIGH); GPIO.output(IN3, GPIO.HIGH); GPIO.output(IN4, GPIO.LOW)
-def right(): GPIO.output(IN1, GPIO.HIGH); GPIO.output(IN2, GPIO.LOW); GPIO.output(IN3, GPIO.LOW); GPIO.output(IN4, GPIO.HIGH)
-def stop(): [GPIO.output(pin, GPIO.LOW) for pin in [IN1, IN2, IN3, IN4]]
+# Silniki (zakładam dwa silniki: lewy i prawy)
+# Dostosuj piny do swojego układu!
+left_motor = Motor(forward=17, backward=22)
+right_motor = Motor(forward=23, backward=24)
+
+def forward():
+    left_motor.forward()
+    right_motor.forward()
+
+def backward():
+    left_motor.backward()
+    right_motor.backward()
+
+def left():
+    left_motor.backward()
+    right_motor.forward()
+
+def right():
+    left_motor.forward()
+    right_motor.backward()
+
+def stop():
+    left_motor.stop()
+    right_motor.stop()
 
 # --- Kamera ---
 picam2 = Picamera2()
@@ -171,4 +187,4 @@ while True:
         current_mode = "manual"
 
 cv2.destroyAllWindows()
-GPIO.cleanup()
+

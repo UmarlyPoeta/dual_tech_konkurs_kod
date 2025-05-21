@@ -14,23 +14,14 @@ import onnxruntime as ort
 objects = []
 
 def rozpoznaj_grafike_pod_qr(frame, bbox_qr):
-    """
-    bbox_qr: lista punktów (4x Point) od pyzbar (polygon QR)
-    """
-    # Wyciągnięcie prostokąta zawierającego QR
     pts = np.array([(pt.x, pt.y) for pt in bbox_qr], dtype=np.float32)
-
-    # Przyjmujemy prostokąt otaczający kod QR
     x, y, w, h = cv2.boundingRect(pts)
-    margin = int(h * 0.6)  # szacowany margines na grafikę pod QR
-
-    # Wycięcie obszaru pod kodem QR
+    margin = int(h * 0.6)
     y2 = y + h + margin
     roi = frame[y + h:y2, x:x + w]
     if roi.size == 0:
         return "---"
 
-    # Porównanie z obrazkami 1.JPG - 10.JPG
     best_match = "---"
     best_score = float("inf")
 
@@ -39,10 +30,8 @@ def rozpoznaj_grafike_pod_qr(frame, bbox_qr):
             template = cv2.imread(f"{i}.JPG", cv2.IMREAD_GRAYSCALE)
             roi_gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
             template_resized = cv2.resize(template, (roi_gray.shape[1], roi_gray.shape[0]))
-
             diff = cv2.absdiff(template_resized, roi_gray)
             score = np.sum(diff)
-
             if score < best_score:
                 best_score = score
                 best_match = f"{i}.JPG"
@@ -54,24 +43,22 @@ def rozpoznaj_grafike_pod_qr(frame, bbox_qr):
 
 # --- MODEL ---
 
-# Ładowanie modelu YOLOv8
 session = ort.InferenceSession("best.onnx")
 
-# Lista klas zgodna z Twoim modelem
-class_labels = ["T62", "T80U", "Tir", "czerwone auto", "fioletowy samochod", "hummer", "hummer niebieski", "radar", "samochod niebieski", "zielone auto", "autobus"]
+class_labels = ["T62", "T80U", "Tir", "czerwone auto", "fioletowy samochod", "hummer",
+                "hummer niebieski", "radar", "samochod niebieski", "zielone auto", "autobus"]
 
 def preprocess(image):
-    img = cv2.resize(image, (640, 640))  # dopasuj do wejścia modelu
+    img = cv2.resize(image, (640, 640))
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img = img.astype(np.float32) / 255.0
-    img = np.transpose(img, (2, 0, 1))  # CHW
+    img = np.transpose(img, (2, 0, 1))
     img = np.expand_dims(img, axis=0)
     return img
 
 def detect_objects(image):
     input_tensor = preprocess(image)
     outputs = session.run(None, {"images": input_tensor})[0]
-    
     results = []
     for det in outputs[0]:
         x0, y0, x1, y1, score, class_id = det[:6]
@@ -96,43 +83,50 @@ qr_result = None
 movement_log = []
 start_time = None
 
-# --- GPIO silników ---
-IN1, IN2, IN3, IN4 = 17, 22, 23, 24
-from gpiozero import Motor
-from time import sleep
+from gpiozero import DigitalOutputDevice
 
-# Silniki (zakładam dwa silniki: lewy i prawy)
-# Dostosuj piny do swojego układu!
-left_motor = Motor(forward=17, backward=22)
-right_motor = Motor(forward=23, backward=24)
+# Przypisanie numerów pinów BCM
+IN1_pin = 17
+IN2_pin = 22
+IN3_pin = 23
+IN4_pin = 24
+
+# Inicjalizacja pinów jako wyjścia
+IN1 = DigitalOutputDevice(IN1_pin)
+IN2 = DigitalOutputDevice(IN2_pin)
+IN3 = DigitalOutputDevice(IN3_pin)
+IN4 = DigitalOutputDevice(IN4_pin)
+
+def set_gpio_state(state):
+    # state: lista 4 elementów (0 lub 1) dla pinów [IN1, IN2, IN3, IN4]
+    IN1.value = state[0]
+    IN2.value = state[1]
+    IN3.value = state[2]
+    IN4.value = state[3]
 
 def forward():
-    left_motor.forward()
-    right_motor.forward()
+    set_gpio_state([1, 0, 1, 0])
 
 def backward():
-    left_motor.backward()
-    right_motor.backward()
+    set_gpio_state([0, 1, 0, 1])
 
 def left():
-    left_motor.backward()
-    right_motor.forward()
+    set_gpio_state([0, 1, 1, 0])
 
 def right():
-    left_motor.forward()
-    right_motor.backward()
+    set_gpio_state([1, 0, 0, 1])
 
 def stop():
-    left_motor.stop()
-    right_motor.stop()
+    set_gpio_state([0, 0, 0, 0])
 
 # --- GPS funkcje ---
 def parse_coordinate(value, direction):
     if not value or not direction:
         return None
     try:
-        degrees = int(value[:2 if direction in "NS" else 3])
-        minutes = float(value[2 if direction in "NS" else 3:])
+        deg_len = 2 if direction in "NS" else 3
+        degrees = int(value[:deg_len])
+        minutes = float(value[deg_len:])
         decimal = degrees + minutes / 60
         if direction in ["S", "W"]:
             decimal *= -1
@@ -153,7 +147,7 @@ def gps_thread():
                         lat = parse_coordinate(fields[2], fields[3])
                         lon = parse_coordinate(fields[4], fields[5])
                         altitude = fields[9]
-                        if lat and lon:
+                        if lat is not None and lon is not None:
                             hh, mm, ss = time_str[0:2], time_str[2:4], time_str[4:6]
                             with gps_lock:
                                 latest_gps = {
@@ -214,7 +208,6 @@ while True:
             label = det["label"]
             crop = frame[y0:y1, x0:x1]
 
-            # Określenie kategorii i typu
             if label in ["T62", "T80U", "radar"]:
                 category = "mil"
             elif label in ["Tir", "autobus"]:
@@ -224,23 +217,18 @@ while True:
 
             typ = label.replace(" ", "_").lower()
 
-            # Współrzędne GPS
             with gps_lock:
                 gps = latest_gps.copy()
             lat = gps["lat"] if gps["lat"] != "N/A" else "00.00000000"
             lon = gps["lon"] if gps["lon"] != "N/A" else "00.00000000"
 
-            # Informacja z QR
             qr_data = last_qr_data if last_qr_data else "---"
 
-            # Zapis zdjęcia
             img_filename = f"zdj{frame_count}_{i}.png"
             cv2.imwrite(img_filename, crop)
 
-            # Numer obiektu
             obj_num = len(objects) + 1
 
-            # Tworzenie wpisu
             entry = f"{obj_num}  {lat} {lon}   {category}   {typ}   {qr_data}  {img_filename}"
             print("Dodano wpis:", entry)
             objects.append(entry)
@@ -248,18 +236,15 @@ while True:
             with open("rozpoznane_obiekty.txt", "a") as f:
                 f.write(entry + "\n")
 
-    # co 5 klatek: uruchamiamy dekodowanie QR
     if frame_count % 5 == 0:
         frame_for_qr = frame.copy()
 
-    # Rysowanie QR
     with qr_lock:
         if qr_result:
             for obj in qr_result:
                 data = obj.data.decode('utf-8')
                 if data != last_qr_data:
                     print(f"Znaleziono QR: {data}")
-                    # Rozpoznaj grafikę pod kodem QR
                     grafika = rozpoznaj_grafike_pod_qr(frame, obj.polygon)
                     print(f"Pod kodem QR znajduje się grafika: {grafika}")
                     last_qr_data = f"{data} ({grafika})"
@@ -277,11 +262,10 @@ while True:
                     pt2 = (pts[(i + 1) % len(pts)].x, pts[(i + 1) % len(pts)].y)
                     cv2.line(frame, pt1, pt2, (0, 255, 0), 2)
 
-    frame = cv2.flip(0, frame)
+    frame = cv2.flip(frame, 0)
     cv2.imshow("Kamera", frame)
     key = cv2.waitKey(1) & 0xFF
 
-    # Buforowany zapis trasy co sekundę
     if time.time() - last_write >= 1:
         with gps_lock:
             gps = latest_gps.copy()
@@ -290,46 +274,36 @@ while True:
             f.write(f"{formatted_time} {gps['lat']} {gps['lon']} {gps['alt']}\n")
         last_write = time.time()
 
-    # Sterowanie ręczne
     if current_mode == "manual":
         if key == ord('w'):
-            forward(); log_movement("forward")
+            forward()
+            log_movement("forward")
         elif key == ord('s'):
-            backward(); log_movement("backward")
+            backward()
+            log_movement("backward")
         elif key == ord('a'):
-            left(); log_movement("left")
+            left()
+            log_movement("left")
         elif key == ord('d'):
-            right(); log_movement("right")
+            right()
+            log_movement("right")
         elif key == ord('x'):
-            stop(); log_movement("stop")
+            stop()
+            log_movement("stop")
         elif key == ord('m'):
-            with open("track_log.json", "w") as f:
-                json.dump(movement_log, f)
-            print("Trasa zapisana.")
+            stop()
+            with open("trasa.log", "r") as f:
+                content = f.read()
+            print("Zawartość trasy.log:\n", content)
         elif key == ord('t'):
-            stop()
             current_mode = "auto"
-            print("== Tryb automatyczny ==")
+            print("Przełączono na tryb automatyczny")
         elif key == ord('q'):
-            stop()
             break
-
     elif current_mode == "auto":
-        print("== Tryb auto: odtwarzanie ==")
-        try:
-            with open("track_log.json", "r") as f:
-                track = json.load(f)
-            for move, _, dur in track:
-                if move == 'forward': forward()
-                elif move == 'backward': backward()
-                elif move == 'left': left()
-                elif move == 'right': right()
-                elif move == 'stop': stop()
-                time.sleep(dur)
-            stop()
-            print("== Koniec trasy ==")
-        except FileNotFoundError:
-            print("Brak pliku trasy!")
-        current_mode = "manual"
+        # Możesz dodać logikę automatycznego sterowania
+        pass
 
+# Zwolnienie GPIO i zamknięcie okien
+stop()
 cv2.destroyAllWindows()
